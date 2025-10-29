@@ -38,26 +38,13 @@ export default defineConfig(({ mode }) => {
               'react-vendor': ['react', 'react-dom', 'react-router-dom'],
               // Separate Google GenAI into its own chunk
               'genai-vendor': ['@google/genai'],
-              // Separate large UI components
-              'ui-components': [
-                './components/LiveMap3D',
-                './components/RouteMap',
-                './components/LiveMap',
-                './components/map-3d/map-3d'
-              ],
             },
           },
         },
         // Increase chunk size warning limit to 1000kb (from 500kb)
         chunkSizeWarningLimit: 1000,
-        // Enable minification
-        minify: 'terser',
-        terserOptions: {
-          compress: {
-            drop_console: true, // Remove console.logs in production
-            drop_debugger: true,
-          },
-        },
+        // Use esbuild minifier (default, faster than terser)
+        minify: 'esbuild',
       },
     };
 });
