@@ -14,14 +14,14 @@ const defaultEmergencyContacts: EmergencyContact[] = [
     id: 'partner',
     name: 'Partner',
     relationship: 'Partner/Spouse',
-    phoneNumber: '', // User should configure
+    phoneNumber: '+254701343452', // User should configure
     isPrimary: true,
   },
   {
     id: 'doctor',
     name: 'OB/GYN',
     relationship: 'Doctor',
-    phoneNumber: '', // User should configure
+    phoneNumber: '+254701343452', // User should configure
   },
   {
     id: 'emergency',
@@ -34,7 +34,7 @@ const defaultEmergencyContacts: EmergencyContact[] = [
     id: 'family',
     name: 'Family Member',
     relationship: 'Family',
-    phoneNumber: '', // User should configure
+    phoneNumber: '+254701343452', // User should configure
   },
 ];
 
