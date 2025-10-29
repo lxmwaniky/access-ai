@@ -9,12 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
     "@google/genai": "^1.27.0",
     "@vis.gl/react-google-maps": "^1.5.5",
-    "zustand": "^5.0.5",
-    "eventemitter3": "^5.0.1"
+    "eventemitter3": "^5.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.9.4",
+    "zustand": "^5.0.5"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
