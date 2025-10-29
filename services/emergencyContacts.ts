@@ -8,33 +8,32 @@ export interface EmergencyContact {
   isPrimary?: boolean;
 }
 
-// Default emergency contacts (can be customized by user later)
 const defaultEmergencyContacts: EmergencyContact[] = [
   {
     id: 'partner',
     name: 'Partner',
     relationship: 'Partner/Spouse',
-    phoneNumber: '+254701343452', // User should configure
+    phoneNumber: '+254701343452',
     isPrimary: true,
   },
   {
     id: 'doctor',
     name: 'OB/GYN',
     relationship: 'Doctor',
-    phoneNumber: '+254701343452', // User should configure
+    phoneNumber: '+254701343452',
   },
   {
     id: 'emergency',
     name: 'Emergency Services',
     relationship: 'Emergency',
-    phoneNumber: '911', // or local emergency number
+    phoneNumber: '911',
     isPrimary: true,
   },
   {
     id: 'family',
     name: 'Family Member',
     relationship: 'Family',
-    phoneNumber: '+254701343452', // User should configure
+    phoneNumber: '+254701343452',
   },
 ];
 
