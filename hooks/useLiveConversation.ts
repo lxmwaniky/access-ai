@@ -361,7 +361,8 @@ const functionDeclarations: FunctionDeclaration[] = [
 export const useLiveConversation = (
     setConversationState: (state: ConversationState) => void,
     setMapData?: (data: { placeType?: string; location?: any; places?: any[] } | null) => void,
-    getCurrentMapData?: () => { placeType?: string; location?: any; places?: any[] } | null
+    getCurrentMapData?: () => { placeType?: string; location?: any; places?: any[] } | null,
+    onTranscription?: (speaker: 'user' | 'ai', text: string) => void
 ) => {
     // FIX: The `LiveSession` type is not exported from `@google/genai`. Using `Promise<any>` as a workaround.
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
@@ -371,6 +372,7 @@ export const useLiveConversation = (
     const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
     const nextStartTimeRef = useRef<number>(0);
+    const pendingMessageRef = useRef<string | null>(null); // Queue for messages sent before session opens
 
     const stopAudioPlayback = useCallback(() => {
         outputAudioContextRef.current?.resume();
@@ -382,7 +384,6 @@ export const useLiveConversation = (
     }, []);
 
     const stopConversation = useCallback(async () => {
-        console.log("Stopping conversation...");
         setConversationState(ConversationState.IDLE);
         stopAudioPlayback();
 
@@ -419,7 +420,6 @@ export const useLiveConversation = (
                 return;
             }
             
-            console.log('Starting conversation with API key:', apiKey.substring(0, 10) + '...');
             const ai = new GoogleGenAI({ apiKey });
             
             // FIX: Added type assertion to handle vendor-prefixed webkitAudioContext for broader browser compatibility.
@@ -437,7 +437,6 @@ export const useLiveConversation = (
                 },
                 callbacks: {
                     onopen: async () => {
-                        console.log('Session opened.');
                         mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
                         // FIX: Added type assertion to handle vendor-prefixed webkitAudioContext for broader browser compatibility.
                         inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -458,6 +457,15 @@ export const useLiveConversation = (
                         scriptProcessorRef.current.connect(inputAudioContextRef.current.destination);
                     },
                     onmessage: async (message: LiveServerMessage) => {
+                        // Capture user transcription
+                        const userTranscript = message.serverContent?.turnComplete;
+                        if (userTranscript && onTranscription) {
+                            const userText = message.serverContent?.modelTurn?.parts?.find(p => p.text)?.text;
+                            if (userText) {
+                                onTranscription('user', userText);
+                            }
+                        }
+
                         if (message.serverContent?.interrupted) {
                             stopAudioPlayback();
                         }
@@ -492,10 +500,6 @@ export const useLiveConversation = (
                                         ? (clientToolCall.args?.contactType as string)
                                         : (clientToolCall.args?.autoCall as string | undefined);
                                     
-                                    console.log('🚨 Emergency contact tool called:', clientToolCall.name);
-                                    console.log('📞 Contact type/autoCall:', autoCall);
-                                    console.log('🔧 Full args:', clientToolCall.args);
-                                    
                                     if (setMapData) {
                                         setMapData({ autoCall } as any);
                                     }
@@ -508,7 +512,6 @@ export const useLiveConversation = (
 
                             setConversationState(ConversationState.PROCESSING);
                             for (const fc of message.toolCall.functionCalls) {
-                                console.log('Function call received:', fc.name, fc.args);
                                 let result = "I'm sorry, I couldn't process that request.";
                                 try {
                                     // FIX: Cast function call arguments from 'unknown' to 'string' to match service function signatures.
@@ -592,8 +595,27 @@ export const useLiveConversation = (
                             }
                         }
 
+                        // Handle text responses
+                        const textResponse = message.serverContent?.modelTurn?.parts?.find(part => part.text);
+                        if (textResponse?.text) {
+                            if (onTranscription) {
+                                onTranscription('ai', textResponse.text);
+                            }
+                            // For text-only responses, go back to listening after a brief delay
+                            setTimeout(() => {
+                                setConversationState(ConversationState.LISTENING);
+                            }, 100);
+                        }
+
+                        // Handle audio responses
                         const audioDataB64 = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
                         if (audioDataB64) {
+                            // Capture AI transcription from audio response
+                            const aiText = message.serverContent?.modelTurn?.parts?.find(p => p.text)?.text;
+                            if (aiText && onTranscription) {
+                                onTranscription('ai', aiText);
+                            }
+
                             if (outputAudioContextRef.current) {
                                 setConversationState(ConversationState.SPEAKING);
                                 const audioContext = outputAudioContextRef.current;
@@ -618,7 +640,6 @@ export const useLiveConversation = (
                         }
                     },
                     onclose: () => {
-                        console.log('Session closed.');
                         stopConversation();
                     },
                     onerror: (e: ErrorEvent) => {
@@ -634,20 +655,205 @@ export const useLiveConversation = (
         }
     }, [setConversationState, stopConversation, stopAudioPlayback]);
 
+    const startTextOnlyConversation = useCallback(async () => {
+        setConversationState(ConversationState.LISTENING);
+        
+        try {
+            const apiKey = process.env.API_KEY;
+            if (!apiKey) {
+                console.error('GEMINI_API_KEY is not set in environment variables');
+                alert('API Key is missing. Please check your .env.local file has GEMINI_API_KEY set.');
+                setConversationState(ConversationState.IDLE);
+                return;
+            }
+            
+            const ai = new GoogleGenAI({ apiKey });
+
+            // Use audio model but without audio config - it will work with text
+            sessionPromiseRef.current = ai.live.connect({
+                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+                config: {
+                    systemInstruction: SYSTEM_INSTRUCTION,
+                    // Don't specify responseModalities - let it default to both
+                    tools: [{ functionDeclarations }],
+                },
+                callbacks: {
+                    onopen: () => {
+                        // Send any pending message
+                        if (pendingMessageRef.current) {
+                            const message = pendingMessageRef.current;
+                            pendingMessageRef.current = null;
+                            sessionPromiseRef.current?.then((session) => {
+                                session.sendRealtimeInput([{ text: message }]);
+                                setConversationState(ConversationState.PROCESSING);
+                            });
+                        }
+                    },
+                    onmessage: async (message: LiveServerMessage) => {
+                        if (message.serverContent?.interrupted) {
+                            stopAudioPlayback();
+                        }
+                        
+                        if (message.toolCall) {
+                            // Client-side tools that change UI state directly
+                            const clientToolCall = message.toolCall.functionCalls.find(fc => 
+                                fc.name === 'start_breathing_exercise' || 
+                                fc.name === 'request_seat_aid' || 
+                                fc.name === 'show_route_map' ||
+                                fc.name === 'show_live_map' ||
+                                fc.name === 'show_emergency_contacts' ||
+                                fc.name === 'call_emergency_contact'
+                            );
+                            if (clientToolCall) {
+                                if (clientToolCall.name === 'start_breathing_exercise') {
+                                    setConversationState(ConversationState.BREATHING);
+                                } else if (clientToolCall.name === 'request_seat_aid') {
+                                    setConversationState(ConversationState.DISPLAYING_CARD);
+                                } else if (clientToolCall.name === 'show_route_map') {
+                                    setConversationState(ConversationState.SHOWING_MAP);
+                                } else if (clientToolCall.name === 'show_live_map') {
+                                    const currentData = getCurrentMapData?.() || {};
+                                    if (setMapData && currentData.places) {
+                                        setMapData(currentData);
+                                    }
+                                    setConversationState(ConversationState.SHOWING_LIVE_MAP);
+                                } else if (clientToolCall.name === 'show_emergency_contacts' || clientToolCall.name === 'call_emergency_contact') {
+                                    const autoCall = clientToolCall.name === 'call_emergency_contact' 
+                                        ? (clientToolCall.args?.contactType as string)
+                                        : (clientToolCall.args?.autoCall as string | undefined);
+                                    
+                                    if (setMapData) {
+                                        setMapData({ autoCall } as any);
+                                    }
+                                    setConversationState(ConversationState.SHOWING_EMERGENCY_CONTACTS);
+                                }
+                                return;
+                            }
+
+                            setConversationState(ConversationState.PROCESSING);
+                            for (const fc of message.toolCall.functionCalls) {
+                                let result = null;
+                                try {
+                                    if (fc.name === 'get_complex_route') {
+                                        result = await getComplexRoute(fc.args.origin as string, fc.args.destination as string);
+                                    } else if (fc.name === 'get_realtime_info') {
+                                        result = await getRealtimeInfo(fc.args.stopId as string);
+                                    } else if (fc.name === 'find_amenity') {
+                                        result = await findAmenity(fc.args.amenityType as string, fc.args.location as string);
+                                    } else if (fc.name === 'find_nearby_places') {
+                                        result = await findNearbyPlaces(fc.args.placeType as string, fc.args.location as string);
+                                    } else if (fc.name === 'find_nearby_places_with_coords') {
+                                        result = await findNearbyPlacesWithCoords(fc.args.placeType as string, fc.args.latitude as number, fc.args.longitude as number, fc.args.radius as number);
+                                    } else if (fc.name === 'get_weather') {
+                                        result = await getWeather(fc.args.location as string);
+                                    } else if (fc.name === 'get_pregnancy_commute_advice') {
+                                        result = await getPregnancyCommuteAdvice(fc.args.scenario as string);
+                                    }
+                                    // Health tools
+                                    else if (fc.name === 'get_pregnancy_medical_info') {
+                                        result = await getPregnancyMedicalInfo(fc.args.query as string);
+                                    } else if (fc.name === 'get_general_pregnancy_info') {
+                                        result = await getGeneralPregnancyInfo(fc.args.query as string);
+                                    } else if (fc.name === 'get_travel_card_info') {
+                                        result = await getTravelCardInfo(fc.args.query as string);
+                                    }
+                                    // Nutrition tools
+                                    else if (fc.name === 'check_food_safety') {
+                                        const { checkFoodSafety } = await import('../services/geminiService');
+                                        result = await checkFoodSafety(fc.args.foodName as string, fc.args.trimester as string);
+                                    } else if (fc.name === 'get_meal_plan') {
+                                        const { getMealPlan } = await import('../services/geminiService');
+                                        result = await getMealPlan(fc.args.trimester as string, fc.args.preferences as string);
+                                    } else if (fc.name === 'get_nutrition_info') {
+                                        const { getNutritionInfo } = await import('../services/geminiService');
+                                        result = await getNutritionInfo(fc.args.topic as string);
+                                    }
+                                    // Education tools
+                                    else if (fc.name === 'search_pregnancy_classes') {
+                                        const { searchPregnancyClasses } = await import('../services/geminiService');
+                                        result = await searchPregnancyClasses(fc.args.location as string, fc.args.classType as string);
+                                    } else if (fc.name === 'get_pregnancy_resource') {
+                                        const { getPregnancyResource } = await import('../services/geminiService');
+                                        result = await getPregnancyResource(fc.args.topic as string);
+                                    }
+                                    // Baby prep tools
+                                    else if (fc.name === 'get_hospital_bag_checklist') {
+                                        const { getHospitalBagChecklist } = await import('../services/geminiService');
+                                        result = await getHospitalBagChecklist();
+                                    } else if (fc.name === 'get_baby_name_suggestions') {
+                                        const { getBabyNameSuggestions } = await import('../services/geminiService');
+                                        result = await getBabyNameSuggestions(fc.args.preferences as string);
+                                    } else if (fc.name === 'get_nursery_advice') {
+                                        const { getNurseryAdvice } = await import('../services/geminiService');
+                                        result = await getNurseryAdvice(fc.args.query as string);
+                                    }
+                                    // Wellness tools
+                                    else if (fc.name === 'get_exercise_advice') {
+                                        const { getExerciseAdvice } = await import('../services/geminiService');
+                                        result = await getExerciseAdvice(fc.args.trimester as string, fc.args.query as string);
+                                    } else if (fc.name === 'get_sleep_advice') {
+                                        const { getSleepAdvice } = await import('../services/geminiService');
+                                        result = await getSleepAdvice(fc.args.issue as string);
+                                    }
+                                    // Week-by-week info
+                                    else if (fc.name === 'get_week_by_week_info') {
+                                        const { getWeekByWeekInfo } = await import('../services/geminiService');
+                                        result = await getWeekByWeekInfo(fc.args.week as number);
+                                    }
+                                } catch (e) {
+                                    console.error("Tool execution error:", e);
+                                }
+                                
+                                const session = await sessionPromiseRef.current;
+                                session?.sendToolResponse({
+                                    functionResponses: { id: fc.id, name: fc.name, response: { result } }
+                                });
+                            }
+                        }
+
+                        // Handle text responses
+                        const textResponse = message.serverContent?.modelTurn?.parts?.find(part => part.text);
+                        if (textResponse?.text) {
+                            if (onTranscription) {
+                                onTranscription('ai', textResponse.text);
+                            }
+                            // For text-only responses, go back to listening after a brief delay
+                            setTimeout(() => {
+                                setConversationState(ConversationState.LISTENING);
+                            }, 100);
+                        }
+                    },
+                    onclose: () => {
+                        stopConversation();
+                    },
+                    onerror: (e: ErrorEvent) => {
+                        console.error('Session error:', e);
+                        stopConversation();
+                    },
+                }
+            });
+
+        } catch (error) {
+            console.error("Failed to start text conversation:", error);
+            setConversationState(ConversationState.IDLE);
+        }
+    }, [setConversationState, stopConversation, stopAudioPlayback, setMapData, getCurrentMapData]);
+
     const sendTextMessage = useCallback(async (text: string) => {
         if (!sessionPromiseRef.current) {
-            console.error("No active session");
+            // Queue the message to be sent when session opens
+            pendingMessageRef.current = text;
             return;
         }
 
         try {
             const session = await sessionPromiseRef.current;
-            session.sendRealtimeText(text);
+            session.sendRealtimeInput([{ text }]);
             setConversationState(ConversationState.PROCESSING);
         } catch (error) {
             console.error("Failed to send text message:", error);
         }
     }, [setConversationState]);
 
-    return { startConversation, stopConversation, sendTextMessage };
+    return { startConversation, startTextOnlyConversation, stopConversation, sendTextMessage };
 };
