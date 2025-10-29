@@ -18,7 +18,8 @@ A voice-activated AI assistant designed specifically for pregnant women to help 
 ## Key Features
 
 ### 1. Voice Interaction
-Real-time voice conversation with AI using Gemini's native audio capabilities.
+-Real-time voice conversation with AI using Gemini's native audio capabilities.
+- Enable "Multilinguistic" based on user  preferences
 
 ### 2. Smart Tools
 - Route planning with comfort prioritization
@@ -36,6 +37,8 @@ Real-time voice conversation with AI using Gemini's native audio capabilities.
 - Medical disclaimers on health info
 - Emergency facility locator
 - Commute safety tips
+### 5. Text interaction
+- Enable text interaction in conjunction with the voice interaction dependng with the state of the user.
 
 ## Architecture
 
